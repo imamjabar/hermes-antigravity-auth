@@ -98,14 +98,14 @@ class TestHermesPluginRegister(unittest.TestCase):
       interceptor_mod._ORIGINAL_WRAP_CODE_ASSIST = None
 
       # Test 1: install succeeds
-      with patch.object(interceptor_mod, "install", return_value=True):
+      with patch.object(interceptor_mod, "install_when_ready", return_value="installed"):
         # Force re-import by clearing from sys.modules
         provider_key = "antigravity_auth.hermes_provider_plugin"
         if provider_key in sys.modules:
           del sys.modules[provider_key]
 
         import antigravity_auth.hermes_provider_plugin as reloaded
-        self.assertTrue(reloaded._interceptor_installed)
+        self.assertEqual(reloaded._interceptor_state, "installed")
 
     finally:
       interceptor_mod.install = orig_install
@@ -126,7 +126,7 @@ class TestHermesPluginRegister(unittest.TestCase):
 
       # Should not raise
       import antigravity_auth.hermes_provider_plugin as reloaded
-      self.assertFalse(reloaded._interceptor_installed)
+      self.assertEqual(reloaded._interceptor_state, "declined")
 
   def test_provider_plugin_sets_provider_registry_labels(self):
     from antigravity_auth.hermes_provider_plugin import antigravity
@@ -235,7 +235,7 @@ class TestHermesPluginRegister(unittest.TestCase):
       self.assertEqual(fake_models._PROVIDER_MODELS["google-gemini-cli"], ["old-model"])
       details = "\n".join(item["detail"] for item in provider_mod.get_provider_diagnostics())
       self.assertIn("_PROVIDER_ALIASES", details)
-      self.assertIn("ProviderEntry", details)
+      self.assertIn("CANONICAL_PROVIDERS", details)
     finally:
       provider_mod._PROVIDER_DIAGNOSTICS[:] = original_diagnostics
 

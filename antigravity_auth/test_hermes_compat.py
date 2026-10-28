@@ -169,7 +169,8 @@ class TestHermesCompat(unittest.TestCase):
 
     self.assertFalse(ok)
     self.assertIn("_PROVIDER_ALIASES", missing)
-    self.assertIn("ProviderEntry", missing)
+    self.assertIn("CANONICAL_PROVIDERS", missing)
+    self.assertNotIn("ProviderEntry", missing)
 
 
 if __name__ == "__main__":

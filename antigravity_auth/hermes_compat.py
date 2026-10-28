@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.metadata
+import sys
 from dataclasses import dataclass
 from types import ModuleType
 from typing import Any
@@ -51,6 +52,16 @@ def _missing(module: Any, names: tuple[str, ...]) -> list[str]:
   return [name for name in names if not hasattr(module, name)]
 
 
+def module_initializing(name: str) -> bool:
+  """True while *name* is mid-import, i.e. its module body is still executing.
+
+  Hermes >=0.22 imports provider plugins from inside ``hermes_cli.auth``; importing
+  runtime modules at that point fails with a circular-import error.
+  """
+  spec = getattr(sys.modules.get(name), "__spec__", None)
+  return bool(getattr(spec, "_initializing", False))
+
+
 def modern_runtime_feature_gaps() -> list[str]:
   gaps: list[str] = []
   for module_name, names in MODERN_RUNTIME_REQUIREMENTS:
@@ -81,9 +92,8 @@ def detect_hermes_features() -> list[HermesFeature]:
       "Standalone provider fallback remains available; picker branding patches are skipped.",
     ))
   else:
-    required = ("_PROVIDER_MODELS", "_PROVIDER_LABELS", "_PROVIDER_ALIASES", "ProviderEntry", "CANONICAL_PROVIDERS")
-    missing = _missing(models, required)
-    if missing:
+    supported, missing = has_required_model_picker_features(models)
+    if not supported:
       rows.append(HermesFeature(
         "WARN",
         "Hermes model picker internals",
@@ -93,16 +103,21 @@ def detect_hermes_features() -> list[HermesFeature]:
     else:
       rows.append(HermesFeature("PASS", "Hermes model picker internals", "required model picker symbols are available"))
 
-    group_missing = _missing(models, ("PROVIDER_GROUPS", "_SLUG_TO_GROUP"))
-    if group_missing:
+    if has_grouping_features(models):
+      rows.append(HermesFeature("PASS", "Hermes provider grouping internals", "provider grouping tables are available"))
+    elif module_initializing("hermes_cli.models"):
       rows.append(HermesFeature(
         "WARN",
         "Hermes provider grouping internals",
-        "missing " + ", ".join(group_missing),
+        "provider grouping tables are not initialized yet",
         "Antigravity can still register, but picker de-grouping is unavailable.",
       ))
     else:
-      rows.append(HermesFeature("PASS", "Hermes provider grouping internals", "provider grouping tables are available"))
+      rows.append(HermesFeature(
+        "INFO",
+        "Hermes provider grouping internals",
+        "this Hermes version has no provider grouping tables; nothing to de-group",
+      ))
 
   providers, providers_error = _import_module("hermes_cli.providers")
   if providers is None:
@@ -145,8 +160,15 @@ def detect_hermes_features() -> list[HermesFeature]:
       rows.append(HermesFeature("PASS", "Hermes auth registry internals", "auth provider registry can be patched"))
 
   runtime_ok = False
-  runtime_missing = modern_runtime_feature_gaps()
-  if runtime_missing:
+  if module_initializing("hermes_cli.auth"):
+    # Probing now would half-import runtime modules and report a bogus circular-import gap.
+    runtime_ok = True
+    rows.append(HermesFeature(
+      "INFO",
+      "Hermes runtime factory internals",
+      "deferred until Hermes finishes importing hermes_cli.auth; the interceptor installs then",
+    ))
+  elif runtime_missing := modern_runtime_feature_gaps():
     rows.append(HermesFeature(
       "WARN",
       "Hermes runtime factory internals",
@@ -192,7 +214,9 @@ def diagnostics_from_features(features: list[HermesFeature]) -> list[dict[str, s
 
 
 def has_required_model_picker_features(models: Any) -> tuple[bool, list[str]]:
-  required = ("_PROVIDER_MODELS", "_PROVIDER_LABELS", "_PROVIDER_ALIASES", "ProviderEntry", "CANONICAL_PROVIDERS")
+  # Hermes >=0.22 no longer re-exports ProviderEntry from hermes_cli.models; the
+  # canonical row is rebuilt from the existing entry's own type instead.
+  required = ("_PROVIDER_MODELS", "_PROVIDER_LABELS", "_PROVIDER_ALIASES", "CANONICAL_PROVIDERS")
   missing = _missing(models, required)
   return not missing, missing
 

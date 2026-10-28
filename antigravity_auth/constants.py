@@ -107,6 +107,10 @@ ANTIGRAVITY_DEFAULT_PROJECT_ID = "rising-fact-p41fc"
 
 ANTIGRAVITY_ACCOUNTS_FILE = "~/.hermes/antigravity-accounts.json"
 
+# Auxiliary tasks (titles, compression, vision) need a model the backend still
+# serves; bare gemini-3.5-flash now returns HTTP 404.
+ANTIGRAVITY_DEFAULT_AUX_MODEL = "gemini-3.8-flash-low"
+
 
 def get_platform() -> str:
     return "WINDOWS" if sys.platform == "win32" else "MACOS"

@@ -14,7 +14,9 @@ from .hermes_compat import (
   diagnostics_from_features,
   has_grouping_features,
   has_required_model_picker_features,
+  module_initializing,
 )
+from .constants import ANTIGRAVITY_DEFAULT_AUX_MODEL
 from .redaction import redact_secret_text
 
 
@@ -193,7 +195,7 @@ antigravity = AntigravityProfile(
   env_vars=(),
   base_url="cloudcode-pa://google",
   auth_type="oauth_external",
-  default_aux_model="gemini-3.5-flash",
+  default_aux_model=ANTIGRAVITY_DEFAULT_AUX_MODEL,
   fallback_models=ANTIGRAVITY_MODELS,
   default_headers={},
 )
@@ -276,10 +278,10 @@ def _patch_hermes_model_picker() -> None:
       )
 
     try:
-      replacement = models.ProviderEntry("google-gemini-cli", label, desc)
       for index, entry in enumerate(models.CANONICAL_PROVIDERS):
         if entry.slug == "google-gemini-cli":
-          models.CANONICAL_PROVIDERS[index] = replacement
+          entry_type = getattr(models, "ProviderEntry", type(entry))
+          models.CANONICAL_PROVIDERS[index] = entry_type("google-gemini-cli", label, desc)
           break
     except Exception as exc:
       _record(
@@ -313,7 +315,8 @@ def _patch_hermes_model_picker() -> None:
           f"could not separate Antigravity from the Google provider group: {exc}",
           "Antigravity may appear under the grouped Google picker row.",
         )
-    return groups_ready
+    # Hermes >=0.22 has no grouping tables at all; only a module still mid-import may gain them.
+    return groups_ready or not module_initializing("hermes_cli.models")
 
   if apply_patches():
     _record("PASS", "model picker patch", "Antigravity provider models and picker branding patched")
@@ -384,14 +387,20 @@ except Exception as exc:
     "Hermes may still route through provider profile registration; rerun doctor inside Hermes.",
   )
 
-_interceptor_installed = False
+_interceptor_state = "declined"
 
 try:
-  from .interceptor import install as _install_interceptor
+  from .interceptor import install_when_ready as _install_interceptor_when_ready
 
-  _interceptor_installed = _install_interceptor()
-  if _interceptor_installed:
+  _interceptor_state = _install_interceptor_when_ready()
+  if _interceptor_state == "installed":
     _record("PASS", "provider interceptor", "HTTP interceptor installed from provider plugin")
+  elif _interceptor_state == "deferred":
+    _record(
+      "INFO",
+      "provider interceptor",
+      "deferred until Hermes finishes importing its runtime modules",
+    )
   else:
     _record(
       "WARN",
@@ -415,7 +424,7 @@ except Exception as _exc:
   )
 
 # Warn loudly if interceptor failed to install — Claude models require it.
-if not _interceptor_installed:
+if _interceptor_state == "declined":
   logger.warning(
     "Antigravity HTTP interceptor is NOT installed. "
     "Gemini models may work via Code Assist, but Claude models require the "

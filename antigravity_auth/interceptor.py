@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
+import contextlib
+import importlib.abc
 import json
 import logging
 import os
-from typing import Any
+import sys
+from typing import Any, Literal
 
 import httpx
 
 from .config import get_config
+from .constants import ANTIGRAVITY_DEFAULT_AUX_MODEL
 from .fingerprint import (
     build_fingerprint_headers,
     generate_fingerprint,
     update_fingerprint_version,
 )
+from .hermes_compat import module_initializing
 from .redaction import redact_secret_text, redact_secrets
 from .transform.envelope import (
     HeaderStyle,
@@ -32,7 +37,16 @@ _ORIGINAL_ENSURE_PROJECT_CONTEXT = None
 _ORIGINAL_CREATE_OPENAI_CLIENT = None
 _ORIGINAL_RESOLVE_RUNTIME_PROVIDER = None
 _ORIGINAL_RESOLVE_PROVIDER_CLIENT = None
+_ORIGINAL_TO_ASYNC_CLIENT = None
 _MODERN_RUNTIME_PATCHED = False
+_DEFERRED_FINDER: _DeferredInstallFinder | None = None
+_INSTALLING = False
+# Importing any of these completes the Hermes runtime surface the modern patch needs.
+_HERMES_RUNTIME_MODULES = frozenset({
+  "hermes_cli.runtime_provider",
+  "agent.auxiliary_client",
+  "agent.agent_runtime_helpers",
+})
 
 _TRACE_DIR = None
 _REQUEST_HOOK_PROCESSED = "antigravity_request_hook_processed"
@@ -1421,7 +1435,7 @@ def _antigravity_runtime(requested: Any = None) -> dict[str, Any]:
 def _install_modern_runtime_patch() -> bool:
   global _PATCHED
   global _ORIGINAL_CREATE_OPENAI_CLIENT, _ORIGINAL_RESOLVE_RUNTIME_PROVIDER
-  global _ORIGINAL_RESOLVE_PROVIDER_CLIENT, _MODERN_RUNTIME_PATCHED
+  global _ORIGINAL_RESOLVE_PROVIDER_CLIENT, _ORIGINAL_TO_ASYNC_CLIENT, _MODERN_RUNTIME_PATCHED
 
   if _MODERN_RUNTIME_PATCHED:
     _PATCHED = True
@@ -1450,6 +1464,7 @@ def _install_modern_runtime_patch() -> bool:
   _ORIGINAL_CREATE_OPENAI_CLIENT = runtime_helpers.create_openai_client
   _ORIGINAL_RESOLVE_RUNTIME_PROVIDER = runtime_provider.resolve_runtime_provider
   _ORIGINAL_RESOLVE_PROVIDER_CLIENT = auxiliary_client.resolve_provider_client
+  _ORIGINAL_TO_ASYNC_CLIENT = getattr(auxiliary_client, "_to_async_client", None)
 
   def _patched_create_openai_client(*args: Any, **kwargs: Any) -> Any:
     agent = args[0] if args else kwargs.get("agent")
@@ -1481,6 +1496,12 @@ def _install_modern_runtime_patch() -> bool:
     requested = kwargs.get("requested")
     if requested is None and args:
       requested = args[0]
+    if not str(requested or "").strip():
+      # Hermes >=0.22 callers omit ``requested`` and let the resolver read model.provider.
+      resolve_requested = getattr(runtime_provider, "resolve_requested_provider", None)
+      if callable(resolve_requested):
+        with contextlib.suppress(Exception):
+          requested = resolve_requested(None)
     if _is_antigravity_provider_name(requested):
       _trace("modern-resolve-runtime", requested=requested)
       return _antigravity_runtime(requested)
@@ -1497,7 +1518,13 @@ def _install_modern_runtime_patch() -> bool:
       main_runtime = kwargs.get("main_runtime")
       if not model and isinstance(main_runtime, dict):
         model = main_runtime.get("model")
-      final_model = str(model or "gemini-3.5-flash")
+      if not model:
+        # gemini-3.5-flash is no longer served (HTTP 404); prefer the configured main model.
+        with contextlib.suppress(Exception):
+          model_cfg = runtime_provider._get_model_config()
+          if _is_antigravity_provider_name(model_cfg.get("provider")):
+            model = model_cfg.get("default") or model_cfg.get("model")
+      final_model = str(model or ANTIGRAVITY_DEFAULT_AUX_MODEL)
       client = AntigravityCloudCodeClient(
         api_key="antigravity-oauth",
         base_url=VIRTUAL_CLOUDCODE_BASE_URL,
@@ -1508,9 +1535,18 @@ def _install_modern_runtime_patch() -> bool:
       return client, final_model
     return _ORIGINAL_RESOLVE_PROVIDER_CLIENT(provider, *args, **kwargs)
 
+  def _patched_to_async_client(sync_client: Any, model: Any, *args: Any, **kwargs: Any):
+    # Hermes >=0.22 rebuilds unknown sync clients as plain AsyncOpenAI on the
+    # virtual cloudcode-pa:// base URL, which httpx cannot send.
+    if isinstance(sync_client, AntigravityCloudCodeClient):
+      return AsyncAntigravityCloudCodeClient(sync_client), model
+    return _ORIGINAL_TO_ASYNC_CLIENT(sync_client, model, *args, **kwargs)
+
   runtime_helpers.create_openai_client = _patched_create_openai_client
   runtime_provider.resolve_runtime_provider = _patched_resolve_runtime_provider
   auxiliary_client.resolve_provider_client = _patched_resolve_provider_client
+  if callable(_ORIGINAL_TO_ASYNC_CLIENT):
+    auxiliary_client._to_async_client = _patched_to_async_client
   _MODERN_RUNTIME_PATCHED = True
   _PATCHED = True
   _trace("modern-runtime-patch-ok")
@@ -1518,7 +1554,7 @@ def _install_modern_runtime_patch() -> bool:
   return True
 
 
-def install() -> bool:
+def _install() -> bool:
   global _PATCHED, _ORIGINAL_INIT, _ORIGINAL_WRAP_CODE_ASSIST, _ORIGINAL_ENSURE_PROJECT_CONTEXT
   if _PATCHED:
     return False
@@ -1620,6 +1656,112 @@ def install() -> bool:
   return True
 
 
+def install() -> bool:
+  global _INSTALLING
+  # _install() imports Hermes runtime modules; the deferred finder fires on those
+  # imports and must not start a nested install that would capture already
+  # patched functions as "originals" (infinite recursion on delegation).
+  if _INSTALLING:
+    return False
+  _INSTALLING = True
+  try:
+    installed = _install()
+  finally:
+    _INSTALLING = False
+  if _PATCHED:
+    _remove_deferred_finder()
+  return installed
+
+
+class _DeferredInstallFinder(importlib.abc.MetaPathFinder):
+  """Install the interceptor right after a Hermes runtime module finishes importing.
+
+  Hermes >=0.22 imports provider plugins from inside ``hermes_cli.auth``, before the
+  runtime modules can be imported, and its fast chat launch resolves the runtime
+  provider before plugin discovery would install the interceptor.
+  """
+
+  _antigravity_deferred_install = True
+
+  def find_spec(self, fullname: str, path: Any, target: Any = None) -> Any:
+    if fullname not in _HERMES_RUNTIME_MODULES:
+      return None
+    for finder in sys.meta_path:
+      find_spec = getattr(finder, "find_spec", None)
+      # Skip every copy of this finder (a reloaded module creates a new class).
+      if getattr(finder, "_antigravity_deferred_install", False) or find_spec is None:
+        continue
+      spec = find_spec(fullname, path, target)
+      if spec is not None:
+        break
+    else:
+      return None
+    loader = spec.loader
+    exec_module = getattr(loader, "exec_module", None)
+    if exec_module is None:
+      return spec
+    own_attr = "exec_module" in getattr(loader, "__dict__", {})
+
+    def _exec_then_install(module: Any) -> None:
+      try:
+        exec_module(module)
+      finally:
+        # The loader may be shared with other modules; wrap this execution only.
+        with contextlib.suppress(AttributeError):
+          if own_attr:
+            loader.exec_module = exec_module
+          else:
+            del loader.exec_module
+      _install_deferred(fullname)
+
+    try:
+      loader.exec_module = _exec_then_install
+    except AttributeError:
+      pass
+    return spec
+
+
+def _install_deferred(just_executed: str) -> None:
+  if _INSTALLING or _PATCHED:
+    return
+  # The module whose body just ran still reads as initializing. Any other runtime
+  # module mid-import would be patched and then overwritten when its body
+  # finishes, so wait for the outermost import's hook.
+  pending = ("hermes_cli.auth", *_HERMES_RUNTIME_MODULES)
+  if any(module_initializing(name) for name in pending if name != just_executed):
+    return
+  try:
+    install()
+  except Exception as exc:
+    logger.warning("Antigravity deferred interceptor install failed: %s", exc)
+
+
+def _remove_deferred_finder() -> None:
+  global _DEFERRED_FINDER
+  if _DEFERRED_FINDER is not None:
+    with contextlib.suppress(ValueError):
+      sys.meta_path.remove(_DEFERRED_FINDER)
+    _DEFERRED_FINDER = None
+
+
+def install_when_ready() -> Literal["installed", "deferred", "declined"]:
+  """Install now, or once Hermes finishes importing ``hermes_cli.auth``.
+
+  Provider plugins load while ``hermes_cli.auth`` is still executing, where importing
+  the runtime modules fails with a circular import.
+  """
+  global _DEFERRED_FINDER
+  if _PATCHED:
+    return "installed"
+  if not module_initializing("hermes_cli.auth"):
+    return "installed" if install() else "declined"
+  if _DEFERRED_FINDER is None:
+    _DEFERRED_FINDER = _DeferredInstallFinder()
+    sys.meta_path.insert(0, _DEFERRED_FINDER)
+  _trace("install-deferred")
+  return "deferred"
+
+
 def is_installed() -> bool:
     return _PATCHED
 
@@ -1713,7 +1855,8 @@ def uninstall() -> bool:
   Returns True if successfully uninstalled, False if not installed."""
   global _PATCHED, _ORIGINAL_INIT, _ORIGINAL_WRAP_CODE_ASSIST, _ORIGINAL_ENSURE_PROJECT_CONTEXT
   global _ORIGINAL_CREATE_OPENAI_CLIENT, _ORIGINAL_RESOLVE_RUNTIME_PROVIDER
-  global _ORIGINAL_RESOLVE_PROVIDER_CLIENT, _MODERN_RUNTIME_PATCHED
+  global _ORIGINAL_RESOLVE_PROVIDER_CLIENT, _ORIGINAL_TO_ASYNC_CLIENT, _MODERN_RUNTIME_PATCHED
+  _remove_deferred_finder()
   if not _PATCHED:
     return False
   try:
@@ -1728,6 +1871,8 @@ def uninstall() -> bool:
           runtime_provider.resolve_runtime_provider = _ORIGINAL_RESOLVE_RUNTIME_PROVIDER
         if _ORIGINAL_RESOLVE_PROVIDER_CLIENT is not None:
           auxiliary_client.resolve_provider_client = _ORIGINAL_RESOLVE_PROVIDER_CLIENT
+        if _ORIGINAL_TO_ASYNC_CLIENT is not None:
+          auxiliary_client._to_async_client = _ORIGINAL_TO_ASYNC_CLIENT
       except Exception:
         pass
     try:
@@ -1748,6 +1893,7 @@ def uninstall() -> bool:
     _ORIGINAL_CREATE_OPENAI_CLIENT = None
     _ORIGINAL_RESOLVE_RUNTIME_PROVIDER = None
     _ORIGINAL_RESOLVE_PROVIDER_CLIENT = None
+    _ORIGINAL_TO_ASYNC_CLIENT = None
     _MODERN_RUNTIME_PATCHED = False
     logger.info("Antigravity interceptor uninstalled")
     return True
