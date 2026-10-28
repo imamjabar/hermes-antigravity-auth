@@ -9,7 +9,7 @@ from ._version import __version__
 PACKAGE_NAME = "hermes-antigravity-auth"
 PACKAGE_EXTRA = "yaml"
 PACKAGE_SPEC = f"{PACKAGE_NAME}[{PACKAGE_EXTRA}]"
-GITHUB_URL = "https://github.com/Reedtrullz/hermes-antigravity-auth.git"
+GITHUB_URL = "https://github.com/imamjabar/hermes-antigravity-auth.git"
 GIT_PACKAGE_SPEC = f"{PACKAGE_SPEC} @ git+{GITHUB_URL}"
 INSTALL_COMMAND = "hermes-antigravity-install"
 CANONICAL_INSTALL_COMMAND = f'python3 -m pip install --upgrade "{PACKAGE_SPEC}" && {INSTALL_COMMAND}'

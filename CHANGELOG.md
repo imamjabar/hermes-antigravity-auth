@@ -2,6 +2,38 @@
 
 All notable changes to hermes-antigravity-auth.
 
+## [1.9.0] — 2026-10-28
+
+Hermes Agent v0.22 compatibility. Verified live on Hermes v0.22.5 (gateway,
+WhatsApp, CLI fast launch, `hermes -z`, Gemini 3.8 and Claude Sonnet 4.6,
+tool calls, title generation and compression).
+
+### Added
+- Gemini 3.7/3.8 Flash models in the provider catalog (upstream PR #16).
+- `hermes-antigravity-install` supports PM-managed Hermes (v0.22+): it vendors
+  the package into `~/.hermes/plugins/antigravity-cli/` with a `pyproject.toml`
+  and re-admits the plugin so `hermes update` keeps it.
+
+### Fixed
+- Default config chat (`model.provider: google-gemini-cli`) fell back to
+  OpenRouter: Hermes v0.22 calls `resolve_runtime_provider()` without
+  `requested`; the runtime patch now reads `model.provider` the same way Hermes does.
+- CLI fast launch resolved the runtime before plugin discovery, so the patch was
+  never active: Hermes v0.22 imports provider plugins while `hermes_cli.auth` is
+  still initializing. The interceptor now defers its install to an import hook
+  that fires right after Hermes' runtime modules finish importing.
+- Async auxiliary calls (compression, vision) failed with "Connection error":
+  Hermes v0.22 rebuilt the Antigravity client as a plain `AsyncOpenAI` on the
+  virtual `cloudcode-pa://` URL. `_to_async_client` now wraps it in
+  `AsyncAntigravityCloudCodeClient`.
+- "Too little data for declared Content-Length" after request rewrites
+  (upstream PR #13).
+- Auxiliary tasks defaulted to `gemini-3.5-flash`, which now returns HTTP 404;
+  they use the configured model, else `gemini-3.8-flash-low`.
+- Doctor no longer reports bogus circular-import / missing `ProviderEntry` /
+  grouping-table warnings on Hermes v0.22; the model picker patch works without
+  `ProviderEntry` and grouping tables.
+
 ## [1.8.0] — 2026-08-21
 
 ### Added
