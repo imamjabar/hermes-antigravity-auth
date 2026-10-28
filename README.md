@@ -1,9 +1,23 @@
 # Hermes Antigravity Auth
 
-**Google Antigravity OAuth for Hermes Agent** — access Claude Opus 4.6, Sonnet 4.6, Gemini 3.1 Pro, and more via Google OAuth.
+**Google Antigravity OAuth for Hermes Agent** — access Claude Opus 4.6, Sonnet 4.6, Gemini 3.8 Flash, Gemini 3.1 Pro, and more via Google OAuth.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](pyproject.toml)
+[![Hermes Agent v0.22](https://img.shields.io/badge/Hermes%20Agent-v0.22-purple.svg)](CHANGELOG.md)
+
+> [!NOTE]
+> **This is a fork of [Reedtrullz/hermes-antigravity-auth](https://github.com/Reedtrullz/hermes-antigravity-auth)
+> with Hermes Agent v0.22 support (v1.9.0).** Upstream 1.8.0 (also the PyPI release) breaks on
+> Hermes v0.22: chat silently falls back to OpenRouter, async auxiliary calls fail, and the plugin
+> disappears on every `hermes update`. See [CHANGELOG](CHANGELOG.md#190--2026-10-28) for details.
+
+| Hermes Agent | Supported | Install mode |
+|--------------|-----------|--------------|
+| v0.22+ (PM-managed) | ✅ Verified on v0.22.5 | Installer copies the package into `~/.hermes/plugins/antigravity-cli/`; survives `hermes update` |
+| v0.18 – v0.21 | ✅ Upstream-supported path, kept unchanged (covered by unit tests, not re-verified live) | Installer pip-installs into Hermes' Python |
+
+No changes to Hermes' own source are needed.
 
 ---
 
@@ -156,11 +170,16 @@ In `hermes model` and the in-agent `/model` picker, Antigravity appears as
 
 ### Step-by-Step Instructions
 
-1. Install from PyPI and run the installer:
+1. Install this fork from GitHub (PyPI still has upstream 1.8.0, which breaks
+   on Hermes v0.22) and run the installer:
    ```bash
-   python3 -m pip install --upgrade "hermes-antigravity-auth[yaml]"
+   python3 -m pip install --upgrade "hermes-antigravity-auth[yaml] @ git+https://github.com/imamjabar/hermes-antigravity-auth.git"
    hermes-antigravity-install
    ```
+   On Hermes v0.22+ use any Python that has `pip` (for example
+   `~/.hermes/tools/python-*/bin/python3 -m venv /tmp/ag && /tmp/ag/bin/pip install ...`);
+   the installer vendors the package into Hermes' plugin directory and
+   re-admits the plugin, so the temporary environment can be deleted afterwards.
 
 2. Provide OAuth client credentials before login. Create a Google OAuth desktop
    client with authorized redirect URI
@@ -181,7 +200,7 @@ In `hermes model` and the in-agent `/model` picker, Antigravity appears as
 
 3. Use `hermes-antigravity-install` for wrapper install or repair. Do not copy
    plugin directories by hand; the installer keeps wrapper files and the Hermes
-   Python package in sync.
+   Python package in sync. Re-run it after upgrading this package.
 
 4. Enable the CLI plugin in `~/.hermes/config.yaml`:
    ```yaml
@@ -211,7 +230,7 @@ hermes -z "Hello" --provider antigravity --model claude-opus-4-6-thinking
 |---------|-------------|
 | **Claude Opus 4.6** | Extended thinking via Antigravity |
 | **Claude Sonnet 4.6** | Fast, capable model |
-| **Gemini 3.5 Flash / 3.1 Pro / 3.0 legacy** | Current Antigravity/Gemini model IDs |
+| **Gemini 3.8 / 3.7 Flash, 3.5 Flash, 3.1 Pro, 3.0 legacy** | Current Antigravity/Gemini model IDs |
 | **Gemini CLI header style** | Optional/deprecated Gemini quota style for Gemini models when `cli_first: true` |
 | **Multi-account** | Add multiple Google accounts, rotate on 403/429 rate-limit or auth failures |
 | **Session recovery signals** | Best-effort detection/toasts for known tool-result and thinking-block errors |
@@ -229,12 +248,23 @@ safety hook and then chooses the Hermes integration path that is available:
 - On Hermes v0.18+, the legacy `agent.gemini_cloudcode_adapter` module may be
   absent. The plugin patches Hermes' modern runtime factory hooks
   (`agent.agent_runtime_helpers.create_openai_client`,
-  `hermes_cli.runtime_provider.resolve_runtime_provider`, and
-  `agent.auxiliary_client.resolve_provider_client`) and supplies an
-  OpenAI-shaped Antigravity Cloud Code client.
+  `hermes_cli.runtime_provider.resolve_runtime_provider`,
+  `agent.auxiliary_client.resolve_provider_client`, and
+  `agent.auxiliary_client._to_async_client`) and supplies an
+  OpenAI-shaped Antigravity Cloud Code client (sync and async).
+- On Hermes v0.22+, provider plugins are imported while `hermes_cli.auth` is
+  still initializing, and the fast chat launch resolves the runtime provider
+  before plugin discovery. The provider plugin therefore defers the patch to an
+  import hook that applies it right after Hermes' runtime modules finish
+  importing, and the patched resolver reads `model.provider` from
+  `config.yaml` when Hermes calls it without an explicit provider.
 - On older Hermes builds that still expose the legacy Cloud Code adapter, the
   plugin patches `GeminiCloudCodeClient.__init__` and
   `wrap_code_assist_request` directly.
+
+Auxiliary tasks (titles, compression, vision) use the configured
+`model.default` when `model.provider` is Antigravity, otherwise
+`gemini-3.8-flash-low`.
 
 The runtime behavior is:
 
@@ -284,7 +314,9 @@ All aliases below route through canonical provider `google-gemini-cli`:
 | Family | Model IDs | Notes |
 |--------|-----------|-------|
 | Claude | `claude-sonnet-4-6`, `claude-sonnet-4-6-thinking`, `claude-opus-4-6-thinking` | Antigravity header style |
-| Gemini 3.5 | `gemini-3.5-flash`, `gemini-3.5-flash-minimal`, `gemini-3.5-flash-medium`, `gemini-3.5-flash-high`, `gemini-3.5-flash-low` | High routes to backend `gemini-3-flash-agent`; other aliases route to `gemini-3.5-flash-low` |
+| Gemini 3.8 Flash | `gemini-3.8-flash-high`, `gemini-3.8-flash-medium`, `gemini-3.8-flash-low` | Tiered IDs only; bare `gemini-3.8-flash` returns 404 |
+| Gemini 3.7 Flash | `gemini-3.7-flash`, `gemini-3.7-flash-high`, `gemini-3.7-flash-medium`, `gemini-3.7-flash-low` | Routes to the `gemini-3.7-flash-tiered` backend |
+| Gemini 3.5 | `gemini-3.5-flash`, `gemini-3.5-flash-minimal`, `gemini-3.5-flash-medium`, `gemini-3.5-flash-high`, `gemini-3.5-flash-low` | High routes to backend `gemini-3-flash-agent`; other aliases route to `gemini-3.5-flash-low`. Bare `gemini-3.5-flash` returned HTTP 404 on 2026-10-28; prefer 3.8 |
 | Gemini 3.1 | `gemini-3.1-pro`, `gemini-3.1-pro-preview`, `gemini-3.1-pro-low`, `gemini-3.1-pro-high` | Prefer bare/tiered IDs; `-preview` is a compatibility alias routed to `gemini-3.1-pro` |
 | Gemini 3.0 legacy | `gemini-3-pro-preview`, `gemini-3-flash-preview` | Legacy names keep `-preview` |
 | Gemini 2.5 legacy | `gemini-2.5-flash`, `gemini-2.5-pro` | Registered fallback models |
@@ -463,9 +495,9 @@ sent as `gemini-3-flash-agent`. Only the Gemini 3.0 legacy IDs shown above keep
 their `-preview` suffix as canonical names.
 
 ```bash
-# ✅ Current Antigravity 2.0 IDs
+# ✅ Current Antigravity IDs
+hermes -z "Hello" --provider ag --model gemini-3.8-flash-high
 hermes -z "Hello" --provider ag --model gemini-3.1-pro
-hermes -z "Hello" --provider ag --model gemini-3.5-flash
 hermes -z "Hello" --provider ag --model gemini-3.5-flash-high
 
 # ✅ Legacy Gemini 3.0 ID
@@ -478,6 +510,19 @@ transform/package path:
 ```bash
 hermes antigravity selftest
 ```
+
+### After `hermes update` (Hermes v0.22+)
+
+The vendored copy in `~/.hermes/plugins/antigravity-cli/` is rebuilt into the
+new environment automatically. Confirm with:
+
+```bash
+hermes antigravity doctor   # expect no WARN/FAIL lines
+hermes -z "Reply OK"
+```
+
+If chat falls back to another provider (for example an OpenRouter "No API key"
+message) or `hermes antigravity` is missing, re-run `hermes-antigravity-install`.
 
 ### Auth Issues
 
@@ -618,7 +663,8 @@ CI runs the same package tests on Python 3.10, 3.11, 3.12, and 3.13, plus a
 clean source-archive install/build smoke that verifies built artifacts do not
 contain `antigravity_auth/_credentials.py`. The workflow uses Node 24-capable
 first-party actions (`actions/checkout@v6` and `actions/setup-python@v6`) to
-avoid GitHub's Node 20 JavaScript action deprecation path.
+avoid GitHub's Node 20 JavaScript action deprecation path. GitHub disables
+workflows on new forks; enable them in the repository's **Actions** tab.
 
 ---
 
@@ -637,6 +683,7 @@ MIT License. See [LICENSE](LICENSE) for details.
 ### Disclaimer
 - Not affiliated with Google. This is an independent open-source project.
 - "Antigravity", "Gemini", "Google Cloud", and "Google" are trademarks of Google LLC.
-- This plugin is based on [opencode-antigravity-auth](https://github.com/NoeFabris/opencode-antigravity-auth) by NoeFabris.
+- This plugin is based on [opencode-antigravity-auth](https://github.com/NoeFabris/opencode-antigravity-auth) by NoeFabris,
+  ported to Hermes by [Reedtrullz](https://github.com/Reedtrullz/hermes-antigravity-auth); Hermes v0.22 support in this fork by [imamjabar](https://github.com/imamjabar).
 
 </details>
