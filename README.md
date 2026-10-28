@@ -32,22 +32,31 @@
 Paste this into any LLM agent (Claude Code, OpenCode, Cursor, etc.):
 
 ```
-Install the hermes-antigravity-auth plugin for Hermes Agent by following the instructions at: https://raw.githubusercontent.com/Reedtrullz/hermes-antigravity-auth/main/README.md
+Install the hermes-antigravity-auth plugin for Hermes Agent by following the instructions at: https://raw.githubusercontent.com/imamjabar/hermes-antigravity-auth/main/README.md
 ```
 
 **Option B: Manual setup**
 
-### 1. Install from PyPI and run the installer
+### 1. Install the package and run the installer
 
-The canonical install and update path is the PyPI package plus
-`hermes-antigravity-install`. The installer resolves the Python environment used
-by the `hermes` launcher, installs this package into that environment, and writes
-the Hermes file-plugin wrappers.
+This fork carries the Hermes v0.22 compatibility fixes (v1.9.0), which are not
+on PyPI yet, so install it from GitHub. The installer resolves the Python
+environment used by the `hermes` launcher, installs this package into that
+environment, and writes the Hermes file-plugin wrappers.
 
 ```bash
-python3 -m pip install --upgrade "hermes-antigravity-auth[yaml]"
+python3 -m pip install --upgrade "hermes-antigravity-auth[yaml] @ git+https://github.com/imamjabar/hermes-antigravity-auth.git"
 hermes-antigravity-install
 ```
+
+**Hermes v0.22 and later** manage their own dependency environment (Hermes
+PM) and rebuild it on every `hermes update`, dropping anything pip-installed
+into it. The installer detects this (`~/.hermes/installs/*/facts.json`) and
+instead copies the package into `~/.hermes/plugins/antigravity-cli/` together
+with a `pyproject.toml`, then runs `hermes plugins disable/enable
+antigravity-cli` so Hermes PM builds it into the environment. Re-run
+`hermes-antigravity-install` after upgrading this package; `hermes update`
+keeps the vendored copy. No changes to Hermes' own source are needed.
 
 The `[yaml]` extra installs PyYAML. Keep it for normal Hermes use whenever you
 have `~/.hermes/config.yaml`; without PyYAML the plugin runs with defaults and
@@ -588,7 +597,7 @@ hermes-antigravity-auth/
 ├── plugins/
 │   ├── model-providers/     # Hermes model provider plugin
 │   └── antigravity-cli/     # Hermes CLI plugin
-├── pyproject.toml           # Python package config (v1.8.0)
+├── pyproject.toml           # Python package config (v1.9.0)
 ├── MIGRATION.md             # OpenCode → Hermes migration guide
 └── README.md                # This file
 ```

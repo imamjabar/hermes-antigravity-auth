@@ -74,6 +74,26 @@ description: Google Antigravity OAuth via Hermes Cloud Code transport
 author: NoeFabris & Reedtrullz
 """
 
+PM_PYPROJECT_TOML = f"""[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hermes-antigravity-auth"
+version = "{__version__}"
+requires-python = ">=3.10"
+dependencies = ["httpx>=0.28,<1.0", "pyyaml>=6.0,<7.0"]
+
+[project.scripts]
+hermes-antigravity-install = "antigravity_auth.install_plugins:main"
+
+[project.entry-points."hermes_agent.plugins"]
+antigravity-cli = "antigravity_auth.hermes_plugin"
+
+[tool.hatch.build.targets.wheel]
+packages = ["antigravity_auth"]
+"""
+
 DEPRECATED_CLI_TOOLSETS = ("messaging", "moa")
 
 
@@ -307,6 +327,48 @@ def install_plugins(home: Path | None = None) -> list[Path]:
   return [cli_dir, provider_dir]
 
 
+def is_pm_managed_hermes(home: Path) -> bool:
+  """Hermes >=0.22 records its PM-built dependency environment in installs/*/facts.json."""
+  return any(path.is_file() for path in (Path(home) / "installs").glob("*/facts.json"))
+
+
+def vendor_package_into_plugin(home: Path, package_dir: Path | None = None) -> Path:
+  """Copy this package into the CLI plugin dir with a pyproject PM can build.
+
+  Hermes PM rebuilds its environment on every update and ignores packages
+  pip-installed into it; it rejects URL requirements, so the source must ship
+  inside the plugin directory itself.
+  """
+  plugin_dir = Path(home) / "plugins" / "antigravity-cli"
+  target = plugin_dir / "antigravity_auth"
+  staged = plugin_dir / ".antigravity_auth.staged"
+  plugin_dir.mkdir(parents=True, exist_ok=True)
+  shutil.rmtree(staged, ignore_errors=True)
+  shutil.copytree(
+    package_dir or Path(__file__).resolve().parent,
+    staged,
+    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "._*"),
+  )
+  if target.is_symlink():
+    target.unlink()
+  else:
+    shutil.rmtree(target, ignore_errors=True)
+  staged.replace(target)
+  _write_file(plugin_dir / "pyproject.toml", PM_PYPROJECT_TOML)
+  return plugin_dir
+
+
+def readmit_plugins(launcher: Path) -> None:
+  """Make Hermes PM rebuild its environment with the vendored package.
+
+  `hermes plugins enable` is a no-op for an already-enabled plugin, so the CLI
+  plugin is disabled first; disabling a plugin that was never enabled may fail.
+  """
+  subprocess.run([str(launcher), "plugins", "disable", "antigravity-cli"], check=False)
+  subprocess.run([str(launcher), "plugins", "enable", "antigravity-cli"], check=True)
+  subprocess.run([str(launcher), "plugins", "enable", "model-providers/antigravity"], check=True)
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser = argparse.ArgumentParser(description="Install Hermes Antigravity plugin wrappers.")
   parser.add_argument("--home", help="Hermes home directory. Defaults to HERMES_HOME or ~/.hermes.")
@@ -322,13 +384,26 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> None:
   args = _parse_args(argv)
+  hermes_home = Path(args.home).expanduser() if args.home else get_hermes_home()
+
+  if is_pm_managed_hermes(hermes_home):
+    paths = install_plugins(hermes_home)
+    for path in paths:
+      print(f"Installed {path}")
+    plugin_dir = vendor_package_into_plugin(hermes_home)
+    print(f"Vendored package into {plugin_dir} (Hermes PM rebuilds it on every update)")
+    hermes_launcher = _find_hermes_launcher(args.hermes_bin)
+    readmit_plugins(hermes_launcher)
+    print(f"Re-admitted Antigravity plugins via {hermes_launcher}")
+    return
+
   if not args.skip_python_install:
     hermes_python = resolve_hermes_python(args.hermes_bin)
     installed = install_package_in_hermes_python(hermes_python, args.package_spec)
     action = "Verified" if not installed else "Installed"
     print(f"{action} package in Hermes Python: {hermes_python}")
 
-  paths = install_plugins(Path(args.home).expanduser() if args.home else None)
+  paths = install_plugins(hermes_home)
   for path in paths:
     print(f"Installed {path}")
 
