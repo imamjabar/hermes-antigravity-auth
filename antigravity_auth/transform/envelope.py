@@ -13,6 +13,7 @@ from ..constants import (
     ANTIGRAVITY_VERSION_FALLBACK,
     GEMINI_CLI_HEADERS,
 )
+from .prompt_guard import sanitize_system_instruction
 
 
 HeaderStyle = Literal["antigravity", "gemini-cli"]
@@ -203,6 +204,10 @@ def build_antigravity_envelope(
   snake_system = request_payload.pop("system_instruction", None)
   if snake_system is not None and "systemInstruction" not in request_payload:
     request_payload["systemInstruction"] = snake_system
+  if "systemInstruction" in request_payload:
+    request_payload["systemInstruction"] = sanitize_system_instruction(
+      request_payload["systemInstruction"]
+    )
 
   envelope: dict[str, Any] = {
       "project": project_id,

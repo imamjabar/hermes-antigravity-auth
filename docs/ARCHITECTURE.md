@@ -211,7 +211,8 @@ The transform package contains the Python equivalents for request/response adapt
 | `transform/messages.py` | OpenAI-style messages to Gemini `contents[].parts[]` | Utility/test coverage; Hermes native Cloud Code path already supplies Gemini-style inner requests |
 | `transform/thinking.py` | Claude/Gemini thinking block filtering and signature helpers | Used by `_apply_claude_transforms()` for Claude request hardening |
 | `transform/schema.py` | JSON Schema allowlist sanitization helpers | Utility/test coverage; the current wrapper patch only adds Claude placeholder required fields |
-| `transform/envelope.py` | Model-name mapping, header randomization, direct Antigravity envelope helpers | Header/model helpers are used by the httpx hook; envelope helpers are used by the modern Cloud Code client, tools, and tests |
+| `transform/envelope.py` | Model-name mapping, header randomization, direct Antigravity envelope helpers, system-instruction rewording | Header/model helpers are used by the httpx hook; envelope helpers are used by the modern Cloud Code client, tools, and tests |
+| `transform/prompt_guard.py` | Rewords `systemInstruction` phrases the Cloud Code backend answers with `429 RESOURCE_EXHAUSTED` | Used by the httpx hook for every outgoing request and by `build_antigravity_envelope()` |
 | `transform/response.py` | Usage extraction, error rewriting, and non-stream response unwrap; streaming SSE is passed through unchanged | Utility/test coverage for direct Antigravity response adaptation; modern runtime response translation is delegated to Hermes' native Gemini adapter |
 
 These modules are covered by unit tests, but they are not all on the same

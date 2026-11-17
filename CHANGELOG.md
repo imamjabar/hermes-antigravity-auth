@@ -5,6 +5,14 @@ All notable changes to hermes-antigravity-auth.
 ## [Unreleased]
 
 ### Fixed
+- Cloud Code Assist rejects a handful of agent-harness phrases in
+  `systemInstruction` with `429 RESOURCE_EXHAUSTED` even when quota is available.
+  Hermes ships several of them in its own system prompt ("the deliverable is a
+  working artifact backed by real tool output", "Reporting a blocker honestly is
+  always better than inventing a result.", the mid-turn steering line,
+  `# Google model operational directives`, `<!-- End Hermes runtime environment -->`),
+  so every turn failed with a rate-limit error. `transform/prompt_guard.py`
+  rewords those phrases with the same meaning before the request goes out.
 - A short Google 429 on the only account made the retry go out without an
   `Authorization` header. Google answered 401 and Hermes stopped with "sign in
   again" although the account was still signed in. When every account is

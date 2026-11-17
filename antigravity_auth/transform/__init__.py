@@ -16,6 +16,12 @@ from .messages import (
   parse_data_url,
   transform_messages_to_contents,
 )
+from .prompt_guard import (
+  SYSTEM_INSTRUCTION_REWRITES,
+  sanitize_antigravity_envelope,
+  sanitize_system_instruction,
+  sanitize_system_instruction_text,
+)
 from .response import (
   extract_retry_info,
   extract_usage_from_body,
@@ -38,6 +44,7 @@ from .thinking import (
 
 __all__ = [
   "HeaderStyle",
+  "SYSTEM_INSTRUCTION_REWRITES",
   "build_antigravity_envelope",
   "build_antigravity_headers",
   "build_antigravity_url",
@@ -57,6 +64,9 @@ __all__ = [
   "parse_data_url",
   "resolve_model_for_header_style",
   "rewrite_preview_access_error",
+  "sanitize_antigravity_envelope",
+  "sanitize_system_instruction",
+  "sanitize_system_instruction_text",
   "sanitize_thinking_part",
   "strip_all_thinking_blocks",
   "strip_thinking_blocks",

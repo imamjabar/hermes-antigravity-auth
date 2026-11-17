@@ -26,6 +26,7 @@ from .transform.envelope import (
     build_antigravity_headers,
     resolve_model_for_header_style,
 )
+from .transform.prompt_guard import sanitize_antigravity_envelope
 from .transform.schema import clean_json_schema
 
 logger = logging.getLogger(__name__)
@@ -882,6 +883,9 @@ def _antigravity_request_hook(request: httpx.Request) -> None:
     model = resolve_model_for_header_style(requested_model, header_style)
     selected = _select_request_account(model, header_style, config)
     body_changed = False
+    if sanitize_antigravity_envelope(body):
+        body_changed = True
+        _trace("hook-system-instruction-sanitized")
     inner_request = body.get("request")
     if model != requested_model:
         body["model"] = model

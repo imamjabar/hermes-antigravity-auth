@@ -10,6 +10,7 @@ transform/
 ├── thinking.py    # Claude thinking block stripping + signature handling
 ├── schema.py      # JSON schema allowlist sanitization (const, $ref removal)
 ├── envelope.py    # Antigravity request envelope + header building
+├── prompt_guard.py # Rewords systemInstruction phrases the backend rejects with 429
 ├── response.py    # Response utility: usage extraction, error rewrites, non-stream response unwrap; streaming SSE is passed through
 ├── test_*.py      # Colocated tests per module
 └── __init__.py    # Explicit exports of all public API symbols
@@ -22,6 +23,7 @@ transform/
 - **Schema sanitization**: Allowlist-based — removes `const`, `$ref`, `$defs`, `title`, `$schema`; merges `allOf`/`anyOf`/`oneOf`
 - **Thinking block stripping**: Both Claude anthropic thinking blocks AND Gemini thought signatures — stripped from outgoing requests
 - **SSE passthrough**: `transform_antigravity_response()` preserves streaming SSE bodies unchanged while extracting usage headers when present
+- **Prompt guard**: `sanitize_system_instruction()` / `sanitize_antigravity_envelope()` reword known-rejected phrases with identical meaning; never drop instruction content
 
 ## Anti-Patterns
 
