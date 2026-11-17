@@ -590,7 +590,15 @@ def _select_request_account(model: str, header_style: str, config: Any) -> dict[
       soft_quota_cache_ttl_ms=soft_quota_cache_ttl_ms,
     )
     if not account:
-      return None
+      account = mgr.get_soonest_available_for_family(family, model=model, header_style=header_style)
+      if not account:
+        return None
+      logger.info(
+        "All %s accounts are rate-limited or cooling down; sending with account index=%s "
+        "so the backend answers with a retryable status instead of 401",
+        family,
+        account.index,
+      )
 
     buffer_seconds = int(getattr(config, "proactive_refresh_buffer_seconds", 1800) or 0)
     cached = _load_cached_token_for_account(account, buffer_seconds)

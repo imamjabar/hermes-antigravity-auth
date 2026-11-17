@@ -2,6 +2,15 @@
 
 All notable changes to hermes-antigravity-auth.
 
+## [Unreleased]
+
+### Fixed
+- A short Google 429 on the only account made the retry go out without an
+  `Authorization` header. Google answered 401 and Hermes stopped with "sign in
+  again" although the account was still signed in. When every account is
+  rate-limited or cooling down, the request now uses the account that frees up
+  first, so Hermes gets a retryable 429 instead.
+
 ## [1.9.0] — 2026-10-28
 
 Hermes Agent v0.22 compatibility. Verified live on Hermes v0.22.5 (gateway,

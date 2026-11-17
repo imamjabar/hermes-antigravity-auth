@@ -694,6 +694,50 @@ class TestRequestHook(unittest.TestCase):
         self.assertEqual(loaded["accounts"][0]["accessToken"], "fresh-access")
         self.assertIn("lastRefreshAt", loaded["accounts"][0])
 
+    def test_request_account_keeps_credentials_when_only_account_is_rate_limited(self):
+        import time
+        from antigravity_auth.accounts.manager import AccountManager
+        from antigravity_auth.interceptor import _select_request_account
+        from antigravity_auth.storage import save_accounts
+
+        now = int(time.time() * 1000)
+        save_accounts({
+            "version": 4,
+            "accounts": [{
+                "email": "limited@example.com",
+                "refreshToken": "limited-refresh",
+                "projectId": "limited-project",
+                "accessToken": "limited-access",
+                "accessTokenExpiresAt": now + 3_600_000,
+                "rateLimitResetTimes": {
+                    "gemini-antigravity:gemini-3.8-flash-high": now + 60_000,
+                },
+            }],
+            "activeIndex": 0,
+            "cursor": 0,
+            "activeIndexByFamily": {"claude": 0, "gemini": 0},
+        })
+        manager = AccountManager.load_from_disk()
+        config = type("Config", (), {
+            "soft_quota_cache_ttl_minutes": "auto",
+            "quota_refresh_interval_minutes": 15,
+            "account_selection_strategy": "hybrid",
+            "pid_offset_enabled": False,
+            "soft_quota_threshold_percent": 100,
+            "proactive_refresh_buffer_seconds": 60,
+        })()
+
+        with patch("antigravity_auth.accounts.shared.get_or_create_global_manager", return_value=manager), \
+             patch("antigravity_auth.token.refresh_access_token") as refresh:
+            self.assertIsNone(manager.get_current_or_next_for_family(
+                "gemini", model="gemini-3.8-flash-high", strategy="hybrid",
+            ))
+            selected = _select_request_account("gemini-3.8-flash-high", "antigravity", config)
+
+        self.assertIsNotNone(selected)
+        self.assertEqual(selected["access"], "limited-access")
+        refresh.assert_not_called()
+
     def test_persist_managed_state_does_not_overwrite_newer_rotated_token(self):
         from antigravity_auth.accounts.manager import AccountManager
         from antigravity_auth.interceptor import _persist_managed_account_state

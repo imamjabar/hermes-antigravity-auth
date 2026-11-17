@@ -431,6 +431,31 @@ class AccountManager:
       self._cursor = (self._cursor + 1) % 1_000_000
     return available[idx]
 
+  def get_soonest_available_for_family(
+    self,
+    family: ModelFamily,
+    model: str | None = None,
+    header_style: HeaderStyle = "antigravity",
+  ) -> ManagedAccount | None:
+    """Enabled account whose rate limit or cooldown ends first.
+
+    Used when every account is limited: a request that still carries
+    credentials gets a retryable 429 from the backend instead of a 401 that
+    Hermes reports as a sign-in failure.
+    """
+    if family == "claude":
+      keys = ["claude"]
+    else:
+      keys = [get_quota_key(family, header_style, model), get_quota_key(family, header_style)]
+
+    def ready_at(account: ManagedAccount) -> float:
+      times = [t for t in (account.rate_limit_reset_times.get(k) for k in keys) if t is not None]
+      if account.cooling_down_until is not None:
+        times.append(account.cooling_down_until)
+      return max(times, default=0.0)
+
+    return min(self.get_enabled_accounts(), key=ready_at, default=None)
+
   def _select_hybrid(
     self,
     family: ModelFamily,
